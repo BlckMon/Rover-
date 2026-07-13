@@ -3,6 +3,9 @@ Autonomous Rover Project
 The Autonomous Rover is a modular, sensor‑driven robotic platform built on an ESP32 microcontroller. It combines motor control, obstacle detection, environmental sensing, and onboard navigation logic into a compact rover capable of autonomous movement and real‑time decision‑making.
 
 This repository contains the firmware, wiring documentation, navigation logic, and system architecture for the rover.
+
+
+
 🚀 Features
 ESP32‑based control system
 
