@@ -1,0 +1,41 @@
+H-BRO
+
+
+#include <Arduino.h>
+
+struct Hbro 
+{
+    int motorA1;
+    int motorA2;
+    int motorB1;
+    int motorB2;
+
+    void setupPins() 
+    {
+        pinMode(motorA1, OUTPUT);
+        pinMode(motorA2, OUTPUT);
+        pinMode(motorB1, OUTPUT);
+        pinMode(motorB2, OUTPUT);
+    }
+    void fremad()
+    {
+        digitalWrite(motorA1, 1);
+        digitalWrite(motorA2, 0);
+        digitalWrite(motorB1, 1);
+        digitalWrite(motorB2, 0);
+    }
+};
+
+void setup() 
+{
+}
+
+void loop() {
+    Hbro forhjul;
+    forhjul.motorA1 = 33;
+    forhjul.motorA2 = 32;
+    forhjul.motorB1 = 26;
+    forhjul.motorB2 = 25;
+    forhjul.setupPins();
+    forhjul.fremad();
+}
