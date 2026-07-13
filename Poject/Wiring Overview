@@ -1,0 +1,27 @@
+Motor Driver → ESP32
+IN1 → GPIO 25
+
+IN2 → GPIO 26
+
+IN3 → GPIO 27
+
+IN4 → GPIO 14
+
+ENA/ENB → PWM pins
+
+Motor power → 5–12V battery
+
+Logic power → 5V buck converter
+
+
+
+Ultrasonic Sensor
+VCC → 5V
+
+GND → GND
+
+TRIG → GPIO 5
+
+ECHO → GPIO 18
+
+Environmental Se
