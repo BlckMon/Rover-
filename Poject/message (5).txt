@@ -1,0 +1,225 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Wire.h>
+#include <Adafruit_PWMServoDriver.h>
+
+// ----- WIFI -----
+const char* ssid = "ESP32-RC-Car";
+const char* password = "Admin123";
+
+// ----- WEB SERVER -----
+WebServer server(80);
+
+// ----- MOTOR PINS (PWM) -----
+const int motorA1 = 33;
+const int motorA2 = 32;
+const int motorB1 = 26;
+const int motorB2 = 25;
+
+// ----- PWM KANALER -----
+const int channelA1 = 0;
+const int channelA2 = 1;
+const int channelB1 = 2;
+const int channelB2 = 3;
+const int freq = 1000; // 1 kHz
+const int resolution = 8; // 0-255
+
+// ----- PCA9685 SERVO -----
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+const int servoChannel = 0;
+const int servoMin = 150;
+const int servoMax = 600;
+int armAngle = 90;
+
+// ----- HTML SIDE -----
+String htmlPage = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<title>ESP32 RC Joystick + Servo</title>
+<style>
+#joystick { width:200px; height:200px; background:#ddd; border-radius:50%; position:relative; touch-action:none; margin-bottom:20px; }
+#stick { width:50px; height:50px; background:red; border-radius:50%; position:absolute; top:75px; left:75px; }
+button { width:120px; height:60px; font-size:26px; margin:10px; }
+input { width:300px; margin:10px; }
+</style>
+</head>
+<body>
+<h1>ESP32 RC Joystick</h1>
+<div id="joystick"><div id="stick"></div></div>
+<button onclick="send(0,100)">Frem</button>
+<button onclick="send(-100,0)">Venstre</button>
+<button onclick="send(0,0)">Stop</button>
+<button onclick="send(100,0)">Højre</button>
+<button onclick="send(0,-100)">Tilbage</button>
+
+<h1>Robot Arm Servo</h1>
+<p>Vinkel: <span id="val">90</span>°</p>
+<input type="range" min="0" max="180" value="90" oninput="updateArm(this.value)">
+
+<script>
+const stick = document.getElementById('stick');
+const joystick = document.getElementById('joystick');
+const send = (x,y)=>fetch(`/move?x=${x}&y=${y}`);
+let dragging = false;
+
+function updateRect() { return joystick.getBoundingClientRect(); }
+
+function updateStick(evt){
+  evt.preventDefault();
+  dragging = true;
+  let rect = updateRect();
+  let centerX = rect.width/2;
+  let centerY = rect.height/2;
+  let touch = evt.touches ? evt.touches[0] : evt;
+  let x = touch.clientX - rect.left - centerX;
+  let y = centerY - (touch.clientY - rect.top);
+  let dist = Math.sqrt(x*x + y*y);
+  let max = rect.width/2;
+  if(dist>max){ x=x*max/dist; y=y*max/dist; }
+  stick.style.left = (centerX + x - 25) + 'px';
+  stick.style.top = (centerY - y - 25) + 'px';
+  send(Math.round(x*100/max), Math.round(y*100/max));
+}
+
+function resetStick(){
+  dragging = false;
+  let rect = updateRect();
+  let centerX = rect.width/2;
+  let centerY = rect.height/2;
+  stick.style.left = (centerX-25)+'px';
+  stick.style.top = (centerY-25)+'px';
+  send(0,0);
+}
+
+joystick.addEventListener('mousedown', updateStick);
+joystick.addEventListener('mousemove', (e)=>{ if(dragging) updateStick(e); });
+joystick.addEventListener('mouseup', resetStick);
+joystick.addEventListener('mouseleave', resetStick);
+joystick.addEventListener('touchstart', updateStick);
+joystick.addEventListener('touchmove', updateStick);
+joystick.addEventListener('touchend', resetStick);
+
+document.addEventListener('keydown', (e) => {
+    switch(e.key) {
+        case 'ArrowUp': send(0, 100); break;
+        case 'ArrowDown': send(0, -100); break;
+        case 'ArrowLeft': send(-100, 0); break;
+        case 'ArrowRight': send(100, 0); break;
+    }
+});
+
+document.addEventListener('keyup', (e) => {
+    switch(e.key) {
+        case 'ArrowUp': case 'ArrowDown': case 'ArrowLeft': case 'ArrowRight': send(0,0); break;
+    }
+});
+
+function updateArm(v){
+  document.getElementById('val').innerText = v;
+  fetch(`/arm?angle=${v}`);
+}
+</script>
+</body>
+</html>
+)rawliteral";
+
+// ----- MOTOR FUNKTIONER -----
+void stopMotors() {
+    ledcWrite(channelA1, 0);
+    ledcWrite(channelA2, 0);
+    ledcWrite(channelB1, 0);
+    ledcWrite(channelB2, 0);
+}
+
+void driveMotor(int x, int y) {
+    int pwmA = constrain(y + x, -100, 100);
+    int pwmB = constrain(y - x, -100, 100);
+
+    int A1 = (pwmA >=0)?(pwmA*255/100):0;
+    int A2 = (pwmA <0)?(-pwmA*255/100):0;
+    int b1 = (pwmB >=0)?(pwmB*255/100):0;
+    int B2 = (pwmB <0)?(-pwmB*255/100):0;
+
+    ledcWrite(channelA1, A1);
+    ledcWrite(channelA2, A2);
+    ledcWrite(channelB1, B1);
+    ledcWrite(channelB2, B2);
+}
+
+// ----- SERVO FUNKTION -----
+int angleToPulse(int angle){
+    return map(angle, 0, 180, servoMin, servoMax);
+}
+
+void setServoAngle(int channel, int angle){
+    pwm.setPWM(channel, 0, angleToPulse(angle));
+    Serial.print("Servo vinkel sat til: ");
+    Serial.println(angle);
+}
+
+// ----- SETUP -----
+void setup() {
+    Serial.begin(115200);
+
+    // Motor opsætning
+    pinMode(motorA1, OUTPUT);
+    pinMode(motorA2, OUTPUT);
+    pinMode(motorB1, OUTPUT);
+    pinMode(motorB2, OUTPUT);
+
+    ledcSetup(channelA1, freq, resolution);
+    ledcSetup(channelA2, freq, resolution);
+    ledcSetup(channelB1, freq, resolution);
+    ledcSetup(channelB2, freq, resolution);
+
+    ledcAttachPin(motorA1, channelA1);
+    ledcAttachPin(motorA2, channelA2);
+    ledcAttachPin(motorB1, channelB1);
+    ledcAttachPin(motorB2, channelB2);
+
+    stopMotors();
+
+    // WiFi hotspot
+    WiFi.softAP(ssid, password);
+    Serial.print("Hotspot IP: ");
+    Serial.println(WiFi.softAPIP());
+
+    // PCA9685 servo init
+    Wire.begin(); // default SDA=21, SCL=22
+    pwm.begin();
+    pwm.setPWMFreq(50);
+    setServoAngle(servoChannel, armAngle);
+
+    // Webserver
+    server.on("/", [](){ server.send(200,"text/html",htmlPage); });
+
+    server.on("/move", [](){
+        if(server.hasArg("x") && server.hasArg("y")){
+            int x = server.arg("x").toInt();
+            int y = server.arg("y").toInt();
+            driveMotor(x,y);
+            server.send(200,"text/plain","OK");
+            Serial.print("Motor x="); Serial.print(x);
+            Serial.print(" y="); Serial.println(y);
+        }
+    });
+
+    server.on("/arm", [](){
+        if(server.hasArg("angle")){
+            armAngle = constrain(server.arg("angle").toInt(),0,180);
+            setServoAngle(servoChannel, armAngle);
+            server.send(200,"text/plain","OK");
+            Serial.print("Arm vinkel: "); Serial.println(armAngle);
+        }
+    });
+
+    server.begin();
+    Serial.println("Server started!");
+}
+
+// ----- LOOP -----
+void loop() {
+    server.handleClient();
+}
