@@ -1,0 +1,183 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+
+// ----- WIFI -----
+const char* ssid = "ESP32-RC-Car";
+const char* password = "Admin123";
+
+// ----- WEB SERVER -----
+WebServer server(80);
+
+// ----- MOTOR PINS (PWM) -----
+const int motorA1 = 33;
+const int motorA2 = 32;
+const int motorB1 = 26;
+const int motorB2 = 25;
+
+// ----- PWM KANALER -----
+const int channelA1 = 0;
+const int channelA2 = 1;
+const int channelB1 = 2;
+const int channelB2 = 3;
+const int freq = 1000; // 1 kHz
+const int resolution = 8; // 0-255
+
+// ----- HTML SIDE -----
+String htmlPage = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<title>ESP32 RC Joystick</title>
+<style>
+#joystick { width:200px; height:200px; background:#ddd; border-radius:50%; position:relative; touch-action:none; margin-bottom:20px; }
+#stick { width:50px; height:50px; background:red; border-radius:50%; position:absolute; top:75px; left:75px; }
+button { width:120px; height:60px; font-size:26px; margin:10px; }
+</style>
+</head>
+<body>
+<h1>ESP32 RC Joystick</h1>
+<div id="joystick"><div id="stick"></div></div>
+<button onclick="send(0,100)">Frem</button>
+<button onclick="send(-100,0)">Venstre</button>
+<button onclick="send(0,0)">Stop</button>
+<button onclick="send(100,0)">Højre</button>
+<button onclick="send(0,-100)">Tilbage</button>
+
+<script>
+const stick = document.getElementById('stick');
+const joystick = document.getElementById('joystick');
+const send = (x,y)=>fetch(`/move?x=${x}&y=${y}`);
+let dragging = false;
+
+function updateRect() { return joystick.getBoundingClientRect(); }
+
+function updateStick(evt){
+  evt.preventDefault();
+  dragging = true;
+  let rect = updateRect();
+  let centerX = rect.width/2;
+  let centerY = rect.height/2;
+  let touch = evt.touches ? evt.touches[0] : evt;
+  let x = touch.clientX - rect.left - centerX;
+  let y = centerY - (touch.clientY - rect.top);
+  let dist = Math.sqrt(x*x + y*y);
+  let max = rect.width/2;
+  if(dist>max){ x=x*max/dist; y=y*max/dist; }
+  stick.style.left = (centerX + x - 25) + 'px';
+  stick.style.top = (centerY - y - 25) + 'px';
+  send(Math.round(x*100/max), Math.round(y*100/max));
+}
+
+function resetStick(){
+  dragging = false;
+  let rect = updateRect();
+  let centerX = rect.width/2;
+  let centerY = rect.height/2;
+  stick.style.left = (centerX-25)+'px';
+  stick.style.top = (centerY-25)+'px';
+  send(0,0);
+}
+
+joystick.addEventListener('mousedown', updateStick);
+joystick.addEventListener('mousemove', (e)=>{ if(dragging) updateStick(e); });
+joystick.addEventListener('mouseup', resetStick);
+joystick.addEventListener('mouseleave', resetStick);
+joystick.addEventListener('touchstart', updateStick);
+joystick.addEventListener('touchmove', updateStick);
+joystick.addEventListener('touchend', resetStick);
+
+document.addEventListener('keydown', (e) => {
+    switch(e.key) {
+        case 'ArrowUp': send(0, 100); break;
+        case 'ArrowDown': send(0, -100); break;
+        case 'ArrowLeft': send(-100, 0); break;
+        case 'ArrowRight': send(100, 0); break;
+    }
+});
+
+document.addEventListener('keyup', (e) => {
+    switch(e.key) {
+        case 'ArrowUp': case 'ArrowDown': case 'ArrowLeft': case 'ArrowRight': send(0,0); break;
+    }
+});
+</script>
+</body>
+</html>
+)rawliteral";
+
+// ----- FUNKTIONER -----
+void stopMotors() {
+    ledcWrite(channelA1, 0);
+    ledcWrite(channelA2, 0);
+    ledcWrite(channelB1, 0);
+    ledcWrite(channelB2, 0);
+}
+
+void driveMotor(int x, int y) {
+    // x og y = -100 til 100
+    int pwmA = constrain(y + x, -100, 100);
+    int pwmB = constrain(y - x, -100, 100);
+
+    // Deklarér alle variabler først
+    int A1, A2, pwmB1, pwmB2;
+
+    // Tildel værdier
+    A1 = (pwmA >= 0) ? (pwmA * 255 / 100) : 0;
+    A2 = (pwmA < 0)  ? (-pwmA * 255 / 100) : 0;
+    pwmB1 = (pwmB >= 0) ? (pwmB * 255 / 100) : 0;
+    pwmB2 = (pwmB < 0)  ? (-pwmB * 255 / 100) : 0;
+
+    // Skriv PWM til motorer
+    ledcWrite(channelA1, A1);
+    ledcWrite(channelA2, A2);
+    ledcWrite(channelB1, pwmB1);
+    ledcWrite(channelB2, pwmB2);
+}
+
+// ----- SETUP -----
+void setup() {
+    Serial.begin(115200);
+
+    pinMode(motorA1, OUTPUT);
+    pinMode(motorA2, OUTPUT);
+    pinMode(motorB1, OUTPUT);
+    pinMode(motorB2, OUTPUT);
+
+    ledcSetup(channelA1, freq, resolution);
+    ledcSetup(channelA2, freq, resolution);
+    ledcSetup(channelB1, freq, resolution);
+    ledcSetup(channelB2, freq, resolution);
+
+    ledcAttachPin(motorA1, channelA1);
+    ledcAttachPin(motorA2, channelA2);
+    ledcAttachPin(motorB1, channelB1);
+    ledcAttachPin(motorB2, channelB2);
+
+    stopMotors();
+
+    WiFi.softAP(ssid, password);
+    Serial.print("Hotspot IP: ");
+    Serial.println(WiFi.softAPIP());
+
+    server.on("/", []() { server.send(200, "text/html", htmlPage); });
+
+    server.on("/move", []() {
+        if (server.hasArg("x") && server.hasArg("y")) {
+            int x = server.arg("x").toInt();
+            int y = server.arg("y").toInt();
+            driveMotor(x, y);
+            server.send(200, "text/plain", "OK");
+        } else {
+            server.send(400, "text/plain", "Missing x or y");
+        }
+    });
+
+    server.begin();
+    Serial.println("Server started");
+}
+
+// ----- LOOP -----
+void loop() {
+    server.handleClient(); // håndter webserver klienter
+}
